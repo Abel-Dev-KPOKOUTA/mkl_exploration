@@ -134,8 +134,8 @@ def main():
     print("╚═══════════════════════════════════════════════════════════╝\n")
     
     # Chemins des fichiers
-    data_dir = Path('../results/data')
-    graphs_dir = Path('../results/graphs')
+    data_dir = Path('/mnt/user-data/outputs')
+    graphs_dir = Path('/mnt/user-data/outputs')
     graphs_dir.mkdir(parents=True, exist_ok=True)
     
     sv_file = data_dir / 'singular_values.csv'
