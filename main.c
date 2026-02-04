@@ -1,6 +1,6 @@
 /******************************************************************************
  * COMPRESSION D'IMAGES PAR DÉCOMPOSITION SVD
- * 
+ * A
  * Projet: Démonstration de l'utilisation d'Intel MKL pour la compression
  *         d'images par décomposition en valeurs singulières
  * 
