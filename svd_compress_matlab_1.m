@@ -13,70 +13,16 @@ function svd_compress_matlab()
     fprintf('║                                                                  ║\n');
     fprintf('╚══════════════════════════════════════════════════════════════════╝\n\n');
 
-    %% 1. Charger ou générer l'image
+    %% 1. Générer ou charger l'image
     fprintf('ÉTAPE 1/4: CHARGEMENT DE L''IMAGE\n');
     fprintf('═══════════════════════════════════\n\n');
 
-    % ============================================================
-    % OPTION 1: Charger une image existante (RECOMMANDÉ)
-    % ============================================================
-    % Demander à l'utilisateur de choisir une image
-    fprintf('   Voulez-vous charger une image ? (o/n): ');
-    choice = input('', 's');
+    % Générer image de test (même que C)
+    width = 256;
+    height = 256;
+    img = generate_test_image(width, height);
 
-    if strcmpi(choice, 'o') || strcmpi(choice, 'oui') || strcmpi(choice, 'y')
-        % Ouvrir dialogue de sélection
-        [filename, pathname] = uigetfile({'*.jpg;*.jpeg;*.png;*.bmp;*.pgm;*.gif', ...
-                                          'Images (*.jpg, *.png, *.bmp, *.pgm)'; ...
-                                          '*.*', 'Tous les fichiers (*.*)'}, ...
-                                          'Sélectionner une image');
-
-        if filename == 0
-            fprintf('   ⚠ Aucune image sélectionnée, génération d''une image de test...\n\n');
-            img = generate_test_image(256, 256);
-        else
-            % Charger l'image
-            filepath = fullfile(pathname, filename);
-            fprintf('   Chargement depuis: %s\n', filepath);
-
-            img_rgb = imread(filepath);
-
-            % Convertir en niveaux de gris si nécessaire
-            if size(img_rgb, 3) == 3
-                img = rgb2gray(img_rgb);
-                fprintf('   ✓ Image couleur convertie en niveaux de gris\n');
-            else
-                img = img_rgb;
-            end
-
-            % Convertir en double [0-255]
-            img = double(img);
-
-            fprintf('   ✓ Image chargée: %d×%d pixels\n\n', size(img, 1), size(img, 2));
-        end
-    else
-        % Générer image de test
-        fprintf('   Génération d''une image de test...\n');
-        img = generate_test_image(256, 256);
-        fprintf('   ✓ Image générée: 256×256 pixels\n\n');
-    end
-
-    % ============================================================
-    % OPTION 2: Charger directement une image (sans dialogue)
-    % ============================================================
-    % Décommentez les lignes ci-dessous et mettez le chemin de votre image:
-    %
-    % img_rgb = imread('C:/chemin/vers/votre/image.jpg');
-    % if size(img_rgb, 3) == 3
-    %     img = rgb2gray(img_rgb);
-    % else
-    %     img = img_rgb;
-    % end
-    % img = double(img);
-    % fprintf('   ✓ Image chargée: %d×%d pixels\n\n', size(img, 1), size(img, 2));
-
-    % Sauvegarder les dimensions
-    [height, width] = size(img);
+    fprintf('   ✓ Image générée: %d×%d pixels\n\n', height, width);
 
     %% 2. Calculer la SVD
     fprintf('ÉTAPE 2/4: DÉCOMPOSITION SVD\n');
@@ -92,22 +38,14 @@ function svd_compress_matlab()
 
     fprintf('   ✓ SVD calculée en %.4f secondes\n', elapsed_svd);
     fprintf('   ✓ σ₁ = %.2f (plus grande)\n', singular_values(1));
-    if length(singular_values) >= 10
-        fprintf('   ✓ σ₁₀ = %.2f\n', singular_values(10));
-    end
-    if length(singular_values) >= 50
-        fprintf('   ✓ σ₅₀ = %.2f\n', singular_values(50));
-    end
-    fprintf('\n');
+    fprintf('   ✓ σ₁₀ = %.2f\n', singular_values(10));
+    fprintf('   ✓ σ₅₀ = %.2f\n\n', singular_values(50));
 
     %% 3. Compression avec différentes valeurs de k
     fprintf('ÉTAPE 3/4: COMPRESSION AVEC DIFFÉRENTES VALEURS DE k\n');
     fprintf('═══════════════════════════════════════════════════════\n\n');
 
-    % Adapter k_values à la taille de l'image
-    min_dim = min(height, width);
     k_values = [5, 10, 25, 50, 75, 100, 150, 200];
-    k_values = k_values(k_values <= min_dim);
 
     fprintf('┌─────┬──────────┬───────────────┬──────────────┬──────────────┐\n');
     fprintf('│  k  │   PSNR   │  Compression  │   Énergie    │   Qualité    │\n');
@@ -148,8 +86,8 @@ function svd_compress_matlab()
         % Stocker résultats
         results = [results; k, psnr_val, ratio, energy, time_compress];
 
-        % Sauvegarder image compressée
-        filename = sprintf('matlab_compressed_k%03d.png', k);
+        % Sauvegarder image
+        filename = sprintf('C:/Users/Hp Elitebook/Desktop/mkl_exploration/matlab_compressed_k%03d.png', k);
         imwrite(uint8(img_compressed), filename);
     end
 
@@ -162,22 +100,11 @@ function svd_compress_matlab()
     fprintf('   Nombre total: %d\n\n', length(singular_values));
     fprintf('   Valeurs principales:\n');
     fprintf('   • σ₁   = %.2f\n', singular_values(1));
-    if length(singular_values) >= 5
-        fprintf('   • σ₅   = %.2f\n', singular_values(5));
-    end
-    if length(singular_values) >= 10
-        fprintf('   • σ₁₀  = %.2f\n', singular_values(10));
-    end
-    if length(singular_values) >= 25
-        fprintf('   • σ₂₅  = %.2f\n', singular_values(25));
-    end
-    if length(singular_values) >= 50
-        fprintf('   • σ₅₀  = %.2f\n', singular_values(50));
-    end
-    if length(singular_values) >= 100
-        fprintf('   • σ₁₀₀ = %.2f\n', singular_values(100));
-    end
-    fprintf('\n');
+    fprintf('   • σ₅   = %.2f\n', singular_values(5));
+    fprintf('   • σ₁₀  = %.2f\n', singular_values(10));
+    fprintf('   • σ₂₅  = %.2f\n', singular_values(25));
+    fprintf('   • σ₅₀  = %.2f\n', singular_values(50));
+    fprintf('   • σ₁₀₀ = %.2f\n\n', singular_values(100));
 
     %% 5. Visualisation
     fprintf('ÉTAPE 5: GÉNÉRATION DES GRAPHIQUES\n');
@@ -190,7 +117,7 @@ function svd_compress_matlab()
     imshow(uint8(img));
     title('Original', 'FontSize', 12, 'FontWeight', 'bold');
 
-    for i = 1:min(7, length(k_values))
+    for i = 1:7
         k = k_values(i);
         img_comp = compress_svd(U, S, V, k);
         psnr_val = compute_psnr(img, img_comp);
@@ -245,15 +172,15 @@ function svd_compress_matlab()
     fprintf('   ✓ Graphiques générés\n\n');
 
     %% 6. Sauvegarder les résultats
-    csvwrite('matlab_results.csv', results);
-    fprintf('   ✓ Résultats exportés: matlab_results.csv\n\n');
+    csvwrite('../results/data/matlab_results.csv', results);
+    fprintf('   ✓ Résultats exportés\n\n');
 
     fprintf('╔══════════════════════════════════════════════════════════════════╗\n');
     fprintf('║                    TRAITEMENT TERMINÉ!                           ║\n');
     fprintf('╚══════════════════════════════════════════════════════════════════╝\n\n');
 
     fprintf('Temps total SVD: %.4f secondes\n', elapsed_svd);
-    fprintf('Images compressées sauvegardées dans le dossier courant\n\n');
+    fprintf('Images sauvegardées dans: ../images/output/\n\n');
 end
 
 %% Fonction: Générer image de test
@@ -317,4 +244,3 @@ function energy_pct = energy_retained(singular_values, k)
     retained_energy = sum(singular_values(1:k).^2);
     energy_pct = (retained_energy / total_energy) * 100;
 end
-
