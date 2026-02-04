@@ -1,13 +1,4 @@
-/******************************************************************************
- * COMPRESSION D'IMAGES PAR DÉCOMPOSITION SVD
- * A
- * Projet: Démonstration de l'utilisation d'Intel MKL pour la compression
- *         d'images par décomposition en valeurs singulières
- * 
- * Auteurs: KPOKOUTA Abel, OUSSOUKPEVI Richenel, ANAHAHOUNDE A. Fredy
- * Institution: UNSTIM - ENSGMM
- * Date: Février 2026
- * 
+/****************************************************************************** 
  * Description:
  *   Ce programme démontre la compression d'images en utilisant la SVD.
  *   Il calcule la décomposition, génère des versions compressées avec
