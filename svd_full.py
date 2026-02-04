@@ -478,7 +478,9 @@ def energy_retained(S, k):
 # 3. MAIN MODIFIÉ : avec choix utilisateur
 # ─────────────────────────────────────────────
 def main():
-    out = "/mnt/user-data/outputs"
+    import os 
+    current_dir = os.getcwd() # dossier courant
+    out = os.path.join(current_dir, 'python')
     os.makedirs(out, exist_ok=True)
 
     print("\n╔══════════════════════════════════════════════╗")
