@@ -1,7 +1,3 @@
-# Makefile pour le projet SVD
-# Auteurs: KPOKOUTA Abel, OUSSOUKPEVI Richenel, ANAHAHOUNDE A. Fredy
-# UNSTIM - ENSGMM | 2025-2026
-
 # Compilateur
 CC = gcc
 
