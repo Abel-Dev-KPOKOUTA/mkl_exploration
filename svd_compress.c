@@ -200,12 +200,13 @@ static void matrix_multiply(double *A, double *B, double *C,
 
 /******************************************************************************
  * Compresser une image avec k valeurs singulières
+ * VERSION CORRIGÉE
  ******************************************************************************/
 Image* svd_compress(SVD *svd, int k) {
     if (!svd || !svd->computed) return NULL;
     
-    int m = svd->m;
-    int n = svd->n;
+    int m = svd->m;  // lignes = hauteur
+    int n = svd->n;  // colonnes = largeur
     int min_mn = (m < n) ? m : n;
     
     if (k > min_mn) k = min_mn;
@@ -214,50 +215,92 @@ Image* svd_compress(SVD *svd, int k) {
     printf("   Compression avec k=%d valeurs singulières...\n", k);
     
     // Créer l'image résultat
-    Image *result = image_create(n, m);
+    Image *result = image_create(n, m);  // width=n, height=m
     if (!result) return NULL;
     
-    // Créer Σₖ : matrice k×n avec seulement k premières valeurs
-    double *Sigma_k = (double*)calloc(k * n, sizeof(double));
-    for (int i = 0; i < k; i++) {
-        Sigma_k[i * n + i] = svd->S[i];
+    // Log de débogage
+    printf("   DEBUG: m=%d, n=%d, k=%d\n", m, n, k);
+    printf("   DEBUG: S[0]=%.2f, S[k-1]=%.2f\n", svd->S[0], svd->S[k-1]);
+    
+    // Calcul de A_k = Σ_i=1^k S[i] * U[:,i] * V^T[i,:]
+    // Plus simple: A_k = (U_k * Σ_k) * V_k^T
+    
+    // 1. Calculer U_k = U(:,1:k) * diag(S(1:k))
+    double *Uk_Sigma = (double*)calloc(m * k, sizeof(double));
+    if (!Uk_Sigma) {
+        image_free(result);
+        return NULL;
     }
     
-    // Temp = U[:,:k] × Σₖ
-    double *Temp = (double*)calloc(m * n, sizeof(double));
+    for (int i = 0; i < m; i++) {
+        for (int j = 0; j < k; j++) {
+            Uk_Sigma[i * k + j] = svd->U[i * m + j] * svd->S[j];
+        }
+    }
     
-    // Version naïve (AVEC MKL: cblas_dgemm)
+    // 2. Calculer A_k = Uk_Sigma * V^T_k (où V^T_k = VT(1:k,:))
+    // V^T est de taille n×n, on prend les k premières lignes
+    
     for (int i = 0; i < m; i++) {
         for (int j = 0; j < n; j++) {
             double sum = 0.0;
             for (int p = 0; p < k; p++) {
-                sum += svd->U[i * m + p] * Sigma_k[p * n + j];
-            }
-            Temp[i * n + j] = sum;
-        }
-    }
-    
-    // result = Temp × VT[:k,:]
-    for (int i = 0; i < m; i++) {
-        for (int j = 0; j < n; j++) {
-            double sum = 0.0;
-            for (int p = 0; p < n; p++) {
-                sum += Temp[i * n + p] * svd->VT[p * n + j];
+                // V^T est stocké en row-major: V^T[p][j]
+                sum += Uk_Sigma[i * k + p] * svd->VT[p * n + j];
             }
             result->data[i * n + j] = sum;
         }
     }
     
-    free(Sigma_k);
-    free(Temp);
+    free(Uk_Sigma);
     
-    // Normaliser l'image résultat
-    image_normalize(result);
+    // ANALYSE des valeurs avant normalisation
+    double min_val = result->data[0];
+    double max_val = result->data[0];
+    for (int i = 1; i < m * n; i++) {
+        if (result->data[i] < min_val) min_val = result->data[i];
+        if (result->data[i] > max_val) max_val = result->data[i];
+    }
+    printf("   DEBUG: Avant normalisation: min=%.2f, max=%.2f\n", min_val, max_val);
     
-    printf("   ✓ Image reconstruite\n");
+    // Normalisation CORRECTE
+    if (max_val - min_val < 1e-10) {
+        // Toutes valeurs identiques
+        double avg_val = (min_val + max_val) / 2.0;
+        printf("   DEBUG: Toutes valeurs identiques (~%.2f), mise à 128\n", avg_val);
+        for (int i = 0; i < m * n; i++) {
+            result->data[i] = 128.0;
+        }
+        result->max_value = 255;
+    } else {
+        // Normalisation linéaire vers [0, 255]
+        double scale = 255.0 / (max_val - min_val);
+        printf("   DEBUG: Normalisation avec scale=%.6f\n", scale);
+        
+        for (int i = 0; i < m * n; i++) {
+            double val = (result->data[i] - min_val) * scale;
+            // Clamper pour éviter les erreurs d'arrondi
+            if (val < 0.0) val = 0.0;
+            if (val > 255.0) val = 255.0;
+            result->data[i] = val;
+        }
+        result->max_value = 255;
+    }
+    
+    // Vérification après normalisation
+    min_val = result->data[0];
+    max_val = result->data[0];
+    for (int i = 1; i < m * n; i++) {
+        if (result->data[i] < min_val) min_val = result->data[i];
+        if (result->data[i] > max_val) max_val = result->data[i];
+    }
+    printf("   DEBUG: Après normalisation: min=%.2f, max=%.2f\n", min_val, max_val);
+    
+    printf("   ✓ Image reconstruite (taille: %dx%d)\n", n, m);
     
     return result;
 }
+
 
 /******************************************************************************
  * Calculer le PSNR (Peak Signal-to-Noise Ratio)

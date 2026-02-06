@@ -427,32 +427,81 @@ Image* image_copy(Image *src) {
 
 /******************************************************************************
  * Normaliser une image (pour l'affichage)
+ * VERSION AMÉLIORÉE avec messages de débogage
  ******************************************************************************/
 void image_normalize(Image *img) {
     if (!img) return;
     
-    // Trouver min et max
+    int total_pixels = img->width * img->height;
+    if (total_pixels == 0) return;
+    
+    // Vérifier si déjà normalisé
+    int already_normalized = 1;
+    for (int i = 0; i < total_pixels; i++) {
+        if (img->data[i] < 0.0 || img->data[i] > 255.0) {
+            already_normalized = 0;
+            break;
+        }
+    }
+    
+    if (already_normalized && img->max_value == 255) {
+        return; // Déjà normalisé
+    }
+    
+    // Trouver min et max réels
     double min_val = img->data[0];
     double max_val = img->data[0];
     
-    for (int i = 1; i < img->width * img->height; i++) {
+    for (int i = 1; i < total_pixels; i++) {
         if (img->data[i] < min_val) min_val = img->data[i];
         if (img->data[i] > max_val) max_val = img->data[i];
     }
     
-    // Éviter division par zéro
+    // Debug
+    printf("   [NORMALIZE] Min=%.2f, Max=%.2f, Range=%.2f\n", 
+           min_val, max_val, max_val - min_val);
+    
+    // Cas particulier: toutes valeurs identiques
     if (max_val - min_val < 1e-10) {
-        // Toutes les valeurs sont identiques
-        for (int i = 0; i < img->width * img->height; i++) {
-            img->data[i] = 128.0;
+        printf("   [NORMALIZE] Toutes valeurs identiques (~%.2f)\n", min_val);
+        if (fabs(min_val) < 1e-10) {
+            // Valeurs proches de 0 -> gris moyen
+            for (int i = 0; i < total_pixels; i++) {
+                img->data[i] = 128.0;
+            }
+        } else {
+            // Valeur constante non nulle
+            for (int i = 0; i < total_pixels; i++) {
+                img->data[i] = fmin(255.0, fmax(0.0, min_val));
+            }
         }
         img->max_value = 255;
         return;
     }
     
-    // Normaliser à [0, 255]
-    for (int i = 0; i < img->width * img->height; i++) {
-        img->data[i] = 255.0 * (img->data[i] - min_val) / (max_val - min_val);
+    // Normalisation linéaire
+    double scale = 255.0 / (max_val - min_val);
+    printf("   [NORMALIZE] Scale factor=%.6f\n", scale);
+    
+    int clamped_count = 0;
+    for (int i = 0; i < total_pixels; i++) {
+        double normalized = (img->data[i] - min_val) * scale;
+        
+        // Clamper
+        if (normalized < 0.0) {
+            normalized = 0.0;
+            clamped_count++;
+        } else if (normalized > 255.0) {
+            normalized = 255.0;
+            clamped_count++;
+        }
+        
+        img->data[i] = normalized;
+    }
+    
+    if (clamped_count > 0) {
+        printf("   [NORMALIZE] %d pixels clampés (%.1f%%)\n", 
+               clamped_count, 100.0 * clamped_count / total_pixels);
     }
     
     img->max_value = 255;
