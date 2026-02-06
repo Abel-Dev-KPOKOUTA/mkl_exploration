@@ -47,7 +47,8 @@ void svd_free(SVD *svd) {
 }
 
 /******************************************************************************
- * Calculer la SVD avec LAPACK (dgelsd - divide and conquer)
+ * Calculer la SVD avec LAPACK (dgesvd)
+ * Version compatible avec Kali Linux
  ******************************************************************************/
 int svd_compute(Image *img, SVD *svd) {
     if (!img || !svd) return -1;
@@ -64,71 +65,68 @@ int svd_compute(Image *img, SVD *svd) {
     printf("   Mémoire allouée: %.2f MB\n", 
            (m * min_dim + min_dim * n + min_dim) * sizeof(double) / (1024.0 * 1024.0));
     
-    // 1. Préparer la matrice d'entrée (copie pour ne pas modifier l'original)
+    // 1. Préparer la matrice d'entrée (column-major pour LAPACK)
     double *A = (double*)malloc(m * n * sizeof(double));
     if (!A) {
         printf("   [ERREUR] Allocation mémoire échouée\n");
         return -1;
     }
     
-    // Copier et transposer si nécessaire (LAPACK utilise column-major)
-    // Pour les images, on travaille généralement avec m lignes (hauteur) × n colonnes (largeur)
+    // Convertir de row-major (image) à column-major (LAPACK)
     for (int i = 0; i < m; i++) {
         for (int j = 0; j < n; j++) {
-            A[j * m + i] = img->data[i * n + j];  // Column-major
+            A[j * m + i] = img->data[i * n + j];
         }
     }
     
-    // 2. Appel à LAPACK dgesvd (SVD complète)
-    clock_t start = clock();
+    // 2. Variables pour LAPACK
+    char jobu = 'S';    // Compute min(m,n) columns of U
+    char jobvt = 'S';   // Compute min(m,n) rows of VT
+    int lda = m;
+    int ldu = m;
+    int ldvt = min_dim;
     
-    // Variables pour LAPACK
-    int lda = m;        // Leading dimension of A
-    int ldu = m;        // Leading dimension of U
-    int ldvt = min_dim; // Leading dimension of VT
-    int info;
-    double *work;
+    // 3. Espace de travail pour LAPACK
     int lwork = -1;
     double work_query;
+    int info;
     
     // Requête de la taille optimale de work
-    info = LAPACKE_dgesvd(LAPACK_COL_MAJOR, 
-                         'S',    // U: m × min_dim
-                         'S',    // VT: min_dim × n
-                         m, n, A, lda,
-                         svd->S,
-                         svd->U, ldu,
-                         svd->VT, ldvt,
-                         &work_query, lwork);
+    info = LAPACKE_dgesvd_work(LAPACK_COL_MAJOR, jobu, jobvt,
+                               m, n, A, lda,
+                               svd->S,
+                               svd->U, ldu,
+                               svd->VT, ldvt,
+                               &work_query, lwork);
     
     if (info != 0) {
-        printf("   [ERREUR LAPACK] dgesvd work query failed: %d\n", info);
+        printf("   [ERREUR LAPACK] dgesvd_work query failed: %d\n", info);
         free(A);
         return -1;
     }
     
     // Allouer le workspace optimal
     lwork = (int)work_query;
-    work = (double*)malloc(lwork * sizeof(double));
+    double *work = (double*)malloc(lwork * sizeof(double));
     if (!work) {
         printf("   [ERREUR] Allocation workspace échouée\n");
         free(A);
         return -1;
     }
     
-    // Calculer la SVD
-    info = LAPACKE_dgesvd(LAPACK_COL_MAJOR,
-                         'S', 'S',
-                         m, n, A, lda,
-                         svd->S,
-                         svd->U, ldu,
-                         svd->VT, ldvt,
-                         work, lwork);
+    // 4. Calculer la SVD
+    clock_t start = clock();
+    
+    info = LAPACKE_dgesvd(LAPACK_COL_MAJOR, jobu, jobvt,
+                          m, n, A, lda,
+                          svd->S,
+                          svd->U, ldu,
+                          svd->VT, ldvt);
     
     clock_t end = clock();
     double elapsed = (double)(end - start) / CLOCKS_PER_SEC;
     
-    // Nettoyer
+    // 5. Nettoyer
     free(work);
     free(A);
     
@@ -140,6 +138,13 @@ int svd_compute(Image *img, SVD *svd) {
     printf("   ✓ SVD calculée en %.3f secondes\n", elapsed);
     printf("   ✓ Plage des valeurs singulières: σ₁=%.2f, σ_%d=%.2f\n", 
            svd->S[0], min_dim, svd->S[min_dim-1]);
+    
+    // 6. Vérifier la validité des valeurs singulières
+    int valid_sv = 0;
+    for (int i = 0; i < min_dim; i++) {
+        if (svd->S[i] > 0) valid_sv++;
+    }
+    printf("   ✓ Valeurs singulières positives: %d/%d\n", valid_sv, min_dim);
     
     svd->computed = 1;
     return 0;
@@ -204,7 +209,7 @@ Image* svd_compress(SVD *svd, int k) {
     }
     
     // Étape 2: result = U_k * temp (avec BLAS dgemm)
-    // Note: On utilise column-major, donc U_k (m×k) * temp (k×n) = résultat (m×n)
+    // Note: column-major: U_k (m×k) * temp (k×n) = résultat (m×n)
     double alpha = 1.0;
     double beta = 0.0;
     cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans,
@@ -215,13 +220,15 @@ Image* svd_compress(SVD *svd, int k) {
                 beta,
                 temp, m);
     
-    // 4. Copier le résultat dans l'image (et transposer de column-major à row-major)
+    // 4. Convertir de column-major à row-major pour l'image
     for (int i = 0; i < m; i++) {
         for (int j = 0; j < n; j++) {
             double val = temp[j * m + i];  // Column-major to row-major
-            // Clamper les valeurs
+            
+            // Normaliser et clamper
             if (val < 0.0) val = 0.0;
             if (val > 255.0) val = 255.0;
+            
             result->data[i * n + j] = val;
         }
     }
@@ -242,7 +249,7 @@ Image* svd_compress(SVD *svd, int k) {
            min_val, max_val, sum / (m * n));
     printf("   ✓ Image compressée générée (k=%d)\n", k);
     
-    // Nettoyer
+    // 6. Nettoyer
     free(U_k);
     free(VT_k);
     free(S_k);
@@ -266,43 +273,44 @@ double svd_compute_psnr(Image *original, Image *compressed) {
     
     if (total == 0) return 0.0;
     
-    // Calculer MSE avec BLAS pour plus de rapidité sur les grandes images
     double mse = 0.0;
     
-    // Créer un vecteur de différences
-    double *diff = (double*)malloc(total * sizeof(double));
-    if (!diff) {
-        // Fallback: calcul manuel
+    // Utiliser BLAS si disponible pour les grandes images
+    if (total > 10000) {
+        double *diff = (double*)malloc(total * sizeof(double));
+        if (diff) {
+            memcpy(diff, original->data, total * sizeof(double));
+            cblas_daxpy(total, -1.0, compressed->data, 1, diff, 1);
+            mse = cblas_ddot(total, diff, 1, diff, 1) / total;
+            free(diff);
+        } else {
+            // Fallback manuel
+            for (int i = 0; i < total; i++) {
+                double d = original->data[i] - compressed->data[i];
+                mse += d * d;
+            }
+            mse /= total;
+        }
+    } else {
+        // Calcul manuel pour les petites images
         for (int i = 0; i < total; i++) {
             double d = original->data[i] - compressed->data[i];
             mse += d * d;
         }
-    } else {
-        // Utiliser BLAS: diff = original - compressed
-        memcpy(diff, original->data, total * sizeof(double));
-        cblas_daxpy(total, -1.0, compressed->data, 1, diff, 1);
-        
-        // Calculer la norme au carré avec BLAS
-        mse = cblas_ddot(total, diff, 1, diff, 1);
-        free(diff);
+        mse /= total;
     }
-    
-    mse /= total;
     
     if (mse < 1e-10) return 99.99;
     
-    // PSNR = 20 * log10(MAX) - 10 * log10(MSE)
-    return 20.0 * log10(255.0) - 10.0 * log10(mse);
+    return 10.0 * log10(255.0 * 255.0 / mse);
 }
 
 /******************************************************************************
  * Calculer le taux de compression
  ******************************************************************************/
 double svd_compression_ratio(int m, int n, int k) {
-    // Stockage original: m * n doubles
-    // Stockage compressé: m * k + k + k * n doubles
-    double original_size = m * n;
-    double compressed_size = m * k + k + k * n;
+    double original_size = m * n * sizeof(double);
+    double compressed_size = (m * k + k + k * n) * sizeof(double);
     
     return original_size / compressed_size;
 }
@@ -316,17 +324,23 @@ double svd_energy_retained(SVD *svd, int k) {
     if (k > svd->min_dim) k = svd->min_dim;
     if (k < 1) return 0.0;
     
-    // Calculer l'énergie totale et partielle
+    // Calculer l'énergie avec BLAS
     double total_energy = cblas_ddot(svd->min_dim, svd->S, 1, svd->S, 1);
     double partial_energy = cblas_ddot(k, svd->S, 1, svd->S, 1);
     
     if (total_energy < 1e-10) return 0.0;
     
-    return (partial_energy / total_energy) * 100.0;
+    double energy_percent = (partial_energy / total_energy) * 100.0;
+    
+    // Assurer des valeurs raisonnables
+    if (energy_percent > 100.0) energy_percent = 100.0;
+    if (energy_percent < 0.0) energy_percent = 0.0;
+    
+    return energy_percent;
 }
 
 /******************************************************************************
- * Exporter les valeurs singulières dans un fichier CSV
+ * Exporter les valeurs singulières
  ******************************************************************************/
 void svd_export_singular_values(SVD *svd, const char *filename) {
     if (!svd || !svd->computed || !filename) return;
