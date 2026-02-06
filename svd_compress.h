@@ -9,9 +9,9 @@ typedef struct {
     int m;              // Nombre de lignes (hauteur)
     int n;              // Nombre de colonnes (largeur)
     int min_dim;        // min(m, n)
-    double *U;          // Matrice U (m × min_dim)
+    double *U;          // Matrice U (m × m) pour LAPACK 'A'
     double *S;          // Vecteur des valeurs singulières (min_dim)
-    double *VT;         // Matrice V^T (min_dim × n)
+    double *VT;         // Matrice V^T (n × n) pour LAPACK 'A'
     int computed;       // Flag: SVD calculé ou non
 } SVD;
 
@@ -24,5 +24,8 @@ double svd_compute_psnr(Image *original, Image *compressed);
 double svd_compression_ratio(int m, int n, int k);
 double svd_energy_retained(SVD *svd, int k);
 void svd_export_singular_values(SVD *svd, const char *filename);
+
+// Pour version LAPACK
+int svd_compute_lapack(Image *img, SVD *svd);
 
 #endif // SVD_COMPRESS_H
