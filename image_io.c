@@ -1,5 +1,6 @@
 #include "image_io.h"
 #include <ctype.h>
+#include <math.h>
 
 /******************************************************************************
  * Créer une nouvelle image
