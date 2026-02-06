@@ -1,9 +1,21 @@
+/******************************************************************************
+ * svd_compress.c - COMPRESSION SVD AVEC BLAS/LAPACK (OpenBLAS)
+ * 
+ * Cette version utilise les bibliothèques BLAS/LAPACK standard
+ * Compatible avec: OpenBLAS, ATLAS, Netlib LAPACK
+ * 
+ * Auteurs: KPOKOUTA Abel, OUSSOUKPEVI Richenel, ANAHAHOUNDE A. Fredy
+ * UNSTIM - ENSGMM | 2025-2026
+ ******************************************************************************/
+
 #include "svd_compress.h"
 #include <string.h>
 #include <time.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
+#include <cblas.h>      // BLAS (cblas_dgemm, cblas_dcopy, etc.)
+#include <lapacke.h>    // LAPACK (LAPACKE_dgesvd)
 
 /******************************************************************************
  * Créer une structure SVD
@@ -17,10 +29,10 @@ SVD* svd_create(int m, int n) {
     svd->min_dim = (m < n) ? m : n;
     svd->computed = 0;
     
-    // Allocation avec les bonnes dimensions
-    svd->U = (double*)calloc(m * svd->min_dim, sizeof(double));
+    // Allocation standard (pas besoin de mkl_malloc)
+    svd->U = (double*)calloc(m * m, sizeof(double));
     svd->S = (double*)calloc(svd->min_dim, sizeof(double));
-    svd->VT = (double*)calloc(svd->min_dim * n, sizeof(double));
+    svd->VT = (double*)calloc(n * n, sizeof(double));
     
     if (!svd->U || !svd->S || !svd->VT) {
         svd_free(svd);
@@ -43,120 +55,110 @@ void svd_free(SVD *svd) {
 }
 
 /******************************************************************************
- * SVD SIMPLE mais FONCTIONNELLE - produit des images VISIBLES
+ * Obtenir le temps en secondes (pour chronométrage)
  ******************************************************************************/
-static void svd_compute_simple_working(double *A, int m, int n, 
-                                       double *U, double *S, double *VT) {
-    
-    printf("   [SVD SIMPLE] Version fonctionnelle pour %dx%d\n", m, n);
-    
-    int min_dim = (m < n) ? m : n;
-    
-    // Analyser l'image
-    double img_min = A[0];
-    double img_max = A[0];
-    double img_sum = 0.0;
-    
-    for (int i = 0; i < m * n; i++) {
-        double val = A[i];
-        if (val < img_min) img_min = val;
-        if (val > img_max) img_max = val;
-        img_sum += val;
-    }
-    
-    double img_avg = img_sum / (m * n);
-    double img_range = img_max - img_min;
-    
-    printf("   [IMAGE] Moyenne=%.1f, Plage=%.1f\n", img_avg, img_range);
-    
-    // Valeurs singulières SIMPLES mais SIGNIFICATIVES
-    double base = img_avg * 0.5;  // Basé sur la moyenne
-    
-    for (int i = 0; i < min_dim; i++) {
-        // Décroissance plus lente pour garder des valeurs significatives
-        double decay = 1.0 / (1.0 + i * 0.05);
-        S[i] = base * decay;
-        
-        // Minimum pour éviter les valeurs trop petites
-        if (S[i] < 10.0) S[i] = 10.0 + i;
-    }
-    
-    printf("   [SIGMA] σ₁=%.1f, σ₂=%.1f, σ₃=%.1f\n", S[0], S[1], S[2]);
-    
-    // U et VT TRÈS SIMPLES mais qui fonctionnent
-    // On utilise des motifs sinusoïdaux basiques
-    
-    for (int i = 0; i < m; i++) {
-        for (int j = 0; j < min_dim; j++) {
-            double freq = (j + 1) * 2.0 * M_PI / m;
-            U[i * min_dim + j] = sin(freq * i) * cos(freq * i * 0.3);
-        }
-    }
-    
-    for (int i = 0; i < min_dim; i++) {
-        for (int j = 0; j < n; j++) {
-            double freq = (i + 1) * 2.0 * M_PI / n;
-            VT[i * n + j] = cos(freq * j) * sin(freq * j * 0.3);
-        }
-    }
-    
-    printf("   [MATRICES] U:%dx%d, VT:%dx%d\n", m, min_dim, min_dim, n);
+static double get_time() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec + ts.tv_nsec / 1e9;
 }
 
 /******************************************************************************
- * Calculer la décomposition SVD
+ * VRAIE SVD AVEC LAPACK - LAPACKE_dgesvd
  ******************************************************************************/
 int svd_compute(Image *img, SVD *svd) {
     if (!img || !svd) return -1;
     
-    printf("\n╔════════════════════════════════════════════════════════════╗\n");
-    printf("║  CALCUL DE LA DÉCOMPOSITION SVD                           ║\n");
-    printf("╚════════════════════════════════════════════════════════════╝\n\n");
+    printf("\n╔══════════════════════════════════════════════════════════╗\n");
+    printf("║  CALCUL SVD AVEC LAPACK (LAPACKE_dgesvd)                ║\n");
+    printf("╚══════════════════════════════════════════════════════════╝\n\n");
     
-    printf("   Dimensions: %d × %d pixels\n", img->height, img->width);
+    int m = img->height;
+    int n = img->width;
     
-    // Calculer la moyenne de l'image
-    double img_sum = 0.0;
-    for (int i = 0; i < img->height * img->width; i++) {
-        img_sum += img->data[i];
+    printf("   Image: %d × %d pixels\n", m, n);
+    printf("   Nombre de valeurs singulières: %d\n\n", svd->min_dim);
+    
+    // Copier les données de l'image (LAPACKE_dgesvd modifie la matrice !)
+    double *A_copy = (double*)malloc(m * n * sizeof(double));
+    if (!A_copy) {
+        fprintf(stderr, "   ✗ Erreur allocation mémoire\n");
+        return -1;
     }
-    double img_mean = img_sum / (img->height * img->width);
-    printf("   [MOYENNE] %.1f\n", img_mean);
     
-    // Copier l'image
-    double *A_copy = (double*)malloc(img->height * img->width * sizeof(double));
-    if (!A_copy) return -1;
+    // Copie simple (pas de cblas_dcopy si pas disponible)
+    memcpy(A_copy, img->data, m * n * sizeof(double));
     
-    memcpy(A_copy, img->data, img->height * img->width * sizeof(double));
+    // Tableau de travail pour LAPACKE_dgesvd
+    double *superb = (double*)malloc((svd->min_dim - 1) * sizeof(double));
+    if (!superb) {
+        free(A_copy);
+        return -1;
+    }
     
-    clock_t start = clock();
+    printf("   Lancement LAPACKE_dgesvd...\n");
     
-    // Utiliser notre SVD simple
-    svd_compute_simple_working(A_copy, img->height, img->width, 
-                              svd->U, svd->S, svd->VT);
+    // Chronométrage
+    double t_start = get_time();
     
-    // IMPORTANT: Ajouter la moyenne aux valeurs singulières
-    // Cela garantit que la reconstruction aura la bonne luminosité
-    svd->S[0] += img_mean;
+    // ════════════════════════════════════════════════════════════════════
+    // APPEL CRITIQUE : LAPACKE_dgesvd
+    // ════════════════════════════════════════════════════════════════════
+    lapack_int info = LAPACKE_dgesvd(
+        LAPACK_ROW_MAJOR,  // Layout (C standard)
+        'A',               // jobu: calculer toute la matrice U (m×m)
+        'A',               // jobvt: calculer toute la matrice V^T (n×n)
+        m,                 // Nombre de lignes
+        n,                 // Nombre de colonnes
+        A_copy,            // Matrice A (sera détruite)
+        n,                 // Leading dimension de A
+        svd->S,            // OUTPUT: valeurs singulières (min_dim)
+        svd->U,            // OUTPUT: matrice U (m×m)
+        m,                 // Leading dimension de U
+        svd->VT,           // OUTPUT: matrice V^T (n×n)
+        n,                 // Leading dimension de VT
+        superb             // Tableau de travail
+    );
     
-    clock_t end = clock();
-    double elapsed = (double)(end - start) / CLOCKS_PER_SEC;
-    
-    printf("   ✓ Temps de calcul: %.3f secondes\n\n", elapsed);
+    double t_elapsed = (get_time() - t_start) * 1000.0;  // En millisecondes
     
     free(A_copy);
-    svd->computed = 1;
+    free(superb);
     
+    // Vérifier le code de retour
+    if (info != 0) {
+        fprintf(stderr, "   ✗ ERREUR LAPACKE_dgesvd: code %d\n", (int)info);
+        if (info < 0) {
+            fprintf(stderr, "      Paramètre %d invalide\n", -(int)info);
+        } else {
+            fprintf(stderr, "      Algorithme n'a pas convergé\n");
+        }
+        return -1;
+    }
+    
+    printf("   ✓ SVD calculée en %.2f ms\n\n", t_elapsed);
+    
+    // Afficher les valeurs singulières principales
+    printf("   Valeurs singulières principales:\n");
+    printf("      σ₁  = %.2f\n", svd->S[0]);
+    if (svd->min_dim >= 2) printf("      σ₂  = %.2f\n", svd->S[1]);
+    if (svd->min_dim >= 5) printf("      σ₅  = %.2f\n", svd->S[4]);
+    if (svd->min_dim >= 10) printf("      σ₁₀ = %.2f\n", svd->S[9]);
+    if (svd->min_dim >= 50) printf("      σ₅₀ = %.2f\n", svd->S[49]);
+    
+    printf("\n");
+    
+    svd->computed = 1;
     return 0;
 }
 
 /******************************************************************************
- * Version ULTRA-SIMPLE qui MARCHE TOUJOURS
- * Produit des images différentes pour chaque k
+ * COMPRESSION SVD - Reconstruction avec k premières valeurs
+ * Utilise cblas_dgemm pour multiplication matricielle optimisée
  ******************************************************************************/
 Image* svd_compress(SVD *svd, int k) {
     if (!svd || !svd->computed) {
-        printf("   [ERREUR] SVD non calculée\n");
+        fprintf(stderr, "   ✗ SVD non calculée\n");
         return NULL;
     }
     
@@ -166,134 +168,96 @@ Image* svd_compress(SVD *svd, int k) {
     if (k > svd->min_dim) k = svd->min_dim;
     if (k < 1) k = 1;
     
-    printf("   [k=%d] Création image %dx%d\n", k, m, n);
+    printf("   [k=%d] Reconstruction %d×%d...\n", k, m, n);
     
-    // Créer l'image
+    // Créer l'image résultat
     Image *result = image_create(n, m);
     if (!result) return NULL;
     
-    // FACTEUR CRITIQUE: AUGMENTER L'ÉCHELLE DES VALEURS
-    // Votre problème: les valeurs S sont trop petites
-    double scale_factor = 50.0;  // Multiplicateur pour avoir des valeurs visibles
+    // ════════════════════════════════════════════════════════════════════
+    // RECONSTRUCTION OPTIMISÉE: A_k = U_k × Σ_k × V_k^T
+    // ════════════════════════════════════════════════════════════════════
     
-    // RÉCONSTRUCTION AVEC ÉCHELLE CORRECTE
-    for (int i = 0; i < m; i++) {
-        for (int j = 0; j < n; j++) {
-            double sum = 0.0;
-            
-            // Utiliser seulement les k premières composantes
-            for (int t = 0; t < k; t++) {
-                // U[i][t] * S[t] * VT[t][j]
-                double u_val = svd->U[i * svd->min_dim + t];
-                double vt_val = svd->VT[t * n + j];
-                sum += u_val * svd->S[t] * vt_val;
-            }
-            
-            // APPLIQUER LE FACTEUR D'ÉCHELLE
-            sum = sum * scale_factor;
-            
-            // Ajouter un biais qui dépend de k
-            // Petit k -> image plus floue -> besoin de plus de contraste
-            double bias = 128.0;
-            if (k < 10) bias = 100.0;
-            if (k > 50) bias = 150.0;
-            
-            result->data[i * n + j] = sum + bias;
+    // Étape 1: Calculer U_k × Σ_k (multiplication élément par élément)
+    // Résultat: matrice Temp de taille m×k
+    double *Temp = (double*)malloc(m * k * sizeof(double));
+    if (!Temp) {
+        image_free(result);
+        return NULL;
+    }
+    
+    // Pour chaque colonne j de U_k, multiplier par σ_j
+    for (int j = 0; j < k; j++) {
+        for (int i = 0; i < m; i++) {
+            Temp[i * k + j] = svd->U[i * m + j] * svd->S[j];
         }
     }
     
-    // ANALYSE
-    double min_val = result->data[0];
-    double max_val = result->data[0];
+    // Étape 2: Multiplier Temp × V_k^T avec cblas_dgemm (BLAS Level 3)
+    // Temp (m×k) × VT_k (k×n) = A_k (m×n)
     
-    for (int i = 1; i < m * n; i++) {
-        double val = result->data[i];
-        if (val < min_val) min_val = val;
-        if (val > max_val) max_val = val;
-    }
+    printf("      Multiplication Temp × V_k^T avec cblas_dgemm...\n");
     
-    double range = max_val - min_val;
-    printf("   [ANALYSE] Min=%.1f, Max=%.1f, Range=%.1f\n", min_val, max_val, range);
+    cblas_dgemm(
+        CblasRowMajor,     // Layout
+        CblasNoTrans,      // Temp non transposée
+        CblasNoTrans,      // VT non transposée (déjà transposée)
+        m,                 // Lignes de Temp
+        n,                 // Colonnes de VT
+        k,                 // Colonnes de Temp = Lignes de VT
+        1.0,               // Alpha (coefficient)
+        Temp,              // Matrice Temp (m×k)
+        k,                 // Leading dimension de Temp
+        svd->VT,           // Matrice VT (k×n) - on prend les k premières lignes
+        n,                 // Leading dimension de VT
+        0.0,               // Beta (on écrase le résultat)
+        result->data,      // OUTPUT: matrice résultat (m×n)
+        n                  // Leading dimension du résultat
+    );
     
-    // NORMALISATION INTELLIGENTE
-    if (range < 10.0) {
-        printf("   [AJUSTEMENT] Range trop petite, élargissement\n");
-        // Élargir le contraste
-        double target_min = 0.0;
-        double target_max = 255.0;
-        
-        if (range > 0) {
-            double scale = (target_max - target_min) / range;
-            for (int i = 0; i < m * n; i++) {
-                result->data[i] = target_min + (result->data[i] - min_val) * scale;
-            }
-        }
-    } else {
-        // Normalisation standard
-        double scale = 255.0 / range;
-        for (int i = 0; i < m * n; i++) {
-            double val = (result->data[i] - min_val) * scale;
-            // Clamper
-            if (val < 0.0) val = 0.0;
-            if (val > 255.0) val = 255.0;
-            result->data[i] = val;
-        }
+    free(Temp);
+    
+    // Clamper les valeurs entre 0 et 255
+    for (int i = 0; i < m * n; i++) {
+        if (result->data[i] < 0.0) result->data[i] = 0.0;
+        if (result->data[i] > 255.0) result->data[i] = 255.0;
     }
     
     result->max_value = 255;
     
-    // AJOUTER UN MOTIF QUI DÉPEND DE k (pour que les images soient différentes)
-    // Seulement pour les petites valeurs de k
-    if (k < 30) {
-        printf("   [MOTIF] Ajout pattern pour k=%d\n", k);
-        for (int i = 0; i < m; i++) {
-            for (int j = 0; j < n; j++) {
-                // Pattern qui dépend de k
-                double pattern = 20.0 * sin(i * 0.01 * k) * cos(j * 0.01 * k);
-                pattern += 10.0 * sin(i * 0.005 * k + j * 0.003 * k);
-                
-                double new_val = result->data[i * n + j] + pattern;
-                // Clamper
-                if (new_val < 0.0) new_val = 0.0;
-                if (new_val > 255.0) new_val = 255.0;
-                result->data[i * n + j] = new_val;
-            }
-        }
-    }
+    printf("      ✓ Image reconstruite\n");
     
-    printf("   ✓ Image générée pour k=%d\n", k);
     return result;
 }
 
 /******************************************************************************
- * Calculer le PSNR - Version SIMPLIFIÉE
+ * Calculer le PSNR (Peak Signal-to-Noise Ratio)
  ******************************************************************************/
 double svd_compute_psnr(Image *original, Image *compressed) {
-    if (!original || !compressed) return 5.0;  // Valeur par défaut
+    if (!original || !compressed) return 0.0;
     
-    int n = original->width * original->height;
-    if (n == 0) return 5.0;
-    
-    // Calcul MSE simplifié (échantillon)
-    int sample_size = (n < 10000) ? n : 10000;
-    double mse = 0.0;
-    
-    for (int i = 0; i < sample_size; i += n/sample_size) {
-        if (i < n) {
-            double diff = original->data[i] - compressed->data[i];
-            mse += diff * diff;
-        }
+    if (original->width != compressed->width || 
+        original->height != compressed->height) {
+        return 0.0;
     }
     
-    mse /= sample_size;
+    int n = original->width * original->height;
     
-    if (mse < 1e-10) return 50.0;
+    // Calculer MSE (Mean Squared Error)
+    double mse = 0.0;
+    for (int i = 0; i < n; i++) {
+        double diff = original->data[i] - compressed->data[i];
+        mse += diff * diff;
+    }
+    mse /= n;
     
-    double psnr = 10.0 * log10(255.0 * 255.0 / mse);
+    // Si MSE est très petit, la qualité est excellente
+    if (mse < 1e-10) {
+        return 100.0;  // Valeur arbitraire pour "parfait"
+    }
     
-    // Ajustement selon k (simulé)
-    // En réalité, le PSNR devrait augmenter avec k
-    if (psnr < 10.0) psnr = 10.0 + (rand() % 20);  // Variation aléatoire pour démo
+    // PSNR = 10 × log₁₀(255² / MSE)
+    double psnr = 10.0 * log10((255.0 * 255.0) / mse);
     
     return psnr;
 }
@@ -304,8 +268,10 @@ double svd_compute_psnr(Image *original, Image *compressed) {
 double svd_compression_ratio(int m, int n, int k) {
     int original_size = m * n;
     int compressed_size = k * (m + n + 1);
+    
     if (compressed_size == 0) return 0.0;
-    return (double)original_size / compressed_size;
+    
+    return (double)original_size / (double)compressed_size;
 }
 
 /******************************************************************************
@@ -317,37 +283,54 @@ double svd_energy_retained(SVD *svd, int k) {
     if (k > svd->min_dim) k = svd->min_dim;
     if (k < 1) return 0.0;
     
-    // Simulation réaliste: l'énergie augmente avec k
-    double percent = 50.0 + 50.0 * (k / (double)svd->min_dim);
-    if (percent > 100.0) percent = 100.0;
+    // Énergie totale = somme des carrés de toutes les valeurs singulières
+    double total_energy = 0.0;
+    for (int i = 0; i < svd->min_dim; i++) {
+        total_energy += svd->S[i] * svd->S[i];
+    }
     
-    return percent;
+    // Énergie conservée avec k valeurs
+    double retained_energy = 0.0;
+    for (int i = 0; i < k; i++) {
+        retained_energy += svd->S[i] * svd->S[i];
+    }
+    
+    if (total_energy < 1e-10) return 0.0;
+    
+    return (retained_energy / total_energy) * 100.0;
 }
 
 /******************************************************************************
- * Exporter les valeurs singulières
+ * Exporter les valeurs singulières dans un fichier CSV
  ******************************************************************************/
 void svd_export_singular_values(SVD *svd, const char *filename) {
     if (!svd || !svd->computed) return;
     
     FILE *fp = fopen(filename, "w");
-    if (!fp) return;
+    if (!fp) {
+        fprintf(stderr, "Erreur: impossible de créer %s\n", filename);
+        return;
+    }
     
     fprintf(fp, "Index,SingularValue,Energy,CumulativeEnergy\n");
     
-    // Générer des données réalistes
-    double total = 0.0;
+    // Calculer l'énergie totale
+    double total_energy = 0.0;
     for (int i = 0; i < svd->min_dim; i++) {
-        total += svd->S[i] * svd->S[i];
+        total_energy += svd->S[i] * svd->S[i];
     }
     
+    // Écrire chaque valeur singulière
     double cumulative = 0.0;
     for (int i = 0; i < svd->min_dim; i++) {
         double energy = svd->S[i] * svd->S[i];
         cumulative += energy;
-        double percent = (cumulative / total) * 100.0;
-        fprintf(fp, "%d,%.6f,%.6f,%.2f\n", i+1, svd->S[i], energy, percent);
+        double percent = (cumulative / total_energy) * 100.0;
+        
+        fprintf(fp, "%d,%.6f,%.6f,%.2f\n", 
+                i + 1, svd->S[i], energy, percent);
     }
     
     fclose(fp);
+    printf("   ✓ Valeurs singulières exportées: %s\n", filename);
 }
