@@ -1,19 +1,20 @@
-/****************************************************************************** 
- * Description:
- *   Ce programme démontre la compression d'images en utilisant la SVD.
- *   Il calcule la décomposition, génère des versions compressées avec
- *   différentes valeurs de k, et mesure les performances.
- * 
- * Compilation:
- *   Sans MKL (démo): gcc -O3 -o svd_demo main.c image_io.c svd_compress.c -lm
- *   Avec MKL: gcc -O3 -o svd_mkl main.c image_io.c svd_compress.c \
- *             -I$MKLROOT/include -L$MKLROOT/lib/intel64 \
- *             -lmkl_rt -lpthread -lm -ldl
- ******************************************************************************/
+// /****************************************************************************** 
+//  * Description:
+//  *   Ce programme démontre la compression d'images en utilisant la SVD.
+//  *   Il calcule la décomposition, génère des versions compressées avec
+//  *   différentes valeurs de k, et mesure les performances.
+//  * 
+//  * Compilation:
+//  *   Sans MKL (démo): gcc -O3 -o svd_demo main.c image_io.c svd_compress.c -lm
+//  *   Avec MKL: gcc -O3 -o svd_mkl main.c image_io.c svd_compress.c \
+//  *             -I$MKLROOT/include -L$MKLROOT/lib/intel64 \
+//  *             -lmkl_rt -lpthread -lm -ldl
+//  ******************************************************************************/
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "image_io.h"
 #include "svd_compress.h"
 
@@ -297,3 +298,4 @@ int main(int argc, char *argv[]) {
  *             -I$MKLROOT/include -L$MKLROOT/lib/intel64 \
  *             -lmkl_rt -lpthread -lm -ldl
  ******************************************************************************/
+
